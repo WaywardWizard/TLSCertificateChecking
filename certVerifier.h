@@ -15,4 +15,6 @@
 #define CT_INVALID 1
 #define CT_VALID 0
 
+#define EXIT_CERTLOAD_FAIL 34
+
 #endif /* CERTVERIFIER_H_ */

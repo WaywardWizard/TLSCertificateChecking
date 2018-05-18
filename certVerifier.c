@@ -7,32 +7,47 @@
  */
 #include "certVerifier.h"
 #include "regexTool.h"
+#include "logger.h"
+#include "dataStructure.h" // Provides dsa_t - "dynamic string array".
 
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
+#include <openssl/asn1.h>
 #include <openssl/bio.h>
+#include <openssl/x509_vfy.h>
+#include <openssl/bn.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
 
+
 #include <openssl/objects.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <regex.h>
 #include <time.h>
 
 #define WILDCARD '*'
 #define WILDCARD_MATCHES "[A-Za-z0-9-]"
+#define ALLOWABLE_DOMAIN_CHAR "[A-Z*.a-z0-9-]+"
+
+#define DN_MATCH 10239
+#define DN_NOMATCH 2398
+
 
 X509* loadCertificate(char* path);
-int verifyCommonName(X509* cert, char* testDomain);
+int verifyDomainName(dsa_t* a, char* domain);
 char* convertWildcardExpressionToRegex(char* wString);
-char* getASNString(ASN1_STRING* s);
-int verifyValidity(X509* cert);
-void programExit(char* m);
-int getPublicKeyLength(X509* cert);
-
+char* getASNString(const ASN1_STRING* s);
+int verifyTimeValidity(const X509* cert);
+void programExit(char* m, int status);
+int getPublicKeyLength(const X509* cert);
+char* getCommonName(const X509* cert);
+dsa_t* getSubjectAlternativeName(const X509* cert);
+BASIC_CONSTRAINTS* getBasicConstraints(const X509* cert);
+EXTENDED_KEY_USAGE* getExtendedKeyUsage(const X509* cert);
 
 int main(int argc, char** argv) {
 
@@ -40,12 +55,23 @@ int main(int argc, char** argv) {
 	ERR_load_BIO_strings();
 	ERR_load_crypto_strings();
 
-	char* cPath="certificates/testone.crt";
-	X509* cert = loadCertificate(cPath);
-	int nameValid=(verifyCommonName(cert, "derp.com")==CN_VALID);
-	int dateValid=(verifyValidity(cert)==CT_VALID);
+	char* cPath="test/certificates/testnine.crt";
+	const X509* cert = loadCertificate(cPath);
+	int dateValid=(verifyTimeValidity(cert)==CT_VALID);
 	int keyLength=getPublicKeyLength(cert);
-	int block=1;
+
+	/* Extract domain names */
+	dsa_t* altName = getSubjectAlternativeName(cert);
+	char* dName = getCommonName(cert);
+	writeto_dsa(altName, dName, altName->length);
+	free(dName);
+	BASIC_CONSTRAINTS* bc = getBasicConstraints(cert);
+	EXTENDED_KEY_USAGE* ku = getExtendedKeyUsage(cert);
+	int n = sk_ASN1_OBJECT_num(ku);
+	char* dataValue=malloc(sizeof(char)*1024);
+	dataValue=(char*)realloc(dataValue, OBJ_obj2txt(dataValue, 1024, sk_ASN1_OBJECT_pop(ku), 0));
+
+	verifyDomainName(altName, "derp.com");
 }
 
 
@@ -59,26 +85,51 @@ X509* loadCertificate(char* path){
 	BIO* cBio = BIO_new(BIO_s_file());
 
 	if (!(BIO_read_filename(cBio, path))){
-		programExit("Failed to read certificate");
-	}
-
-	if (!NULL){
-		programExit("!NULL is true");
+		programExit("Failed to read certificate", EXIT_CERTLOAD_FAIL);
 	}
 
 	if (!(cert = PEM_read_bio_X509(cBio, NULL, 0 ,NULL))) {
-		programExit("Failed to read certificate");
+		programExit("Failed to read certificate", EXIT_CERTLOAD_FAIL);
 	}
 
 	BIO_free(cBio);
 	return cert;
 }
 
+dsa_t* getSubjectAlternativeName(const X509* cert) {
 
-int verifyCommonName(X509* cert, char* testDomain) {
+	dsa_t* a=create_dsa();
+
+	/* Check for subject alternative name - data for san is a sequence
+	 * of general names. (4.2.1.6 RFC5280) A sequence is represented internally in
+	 * openssl as a STACK_OF(<seq_type>). We convert the serialized data to internal rep here. */
+    STACK_OF(GENERAL_NAME)* saName = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+    GENERAL_NAME* altName;
+
+    while((altName=sk_GENERAL_NAME_pop(saName))!=NULL){
+    	unsigned char* buffer;
+    	/* Write any domain names (decoded from ia5string) into the dynamic string array */
+    	if(altName->type==GEN_DNS){
+			ASN1_STRING_to_UTF8(&buffer, altName->d.dNSName);
+    		writeto_dsa(a, (char*)buffer, a->length);
+    		free(buffer);
+    	}
+    }
+    return(a);
+
+}
+
+EXTENDED_KEY_USAGE* getExtendedKeyUsage(const X509* cert) {
+	return((EXTENDED_KEY_USAGE*)X509_get_ext_d2i(cert, NID_ext_key_usage, NULL, NULL));
+}
+
+BASIC_CONSTRAINTS* getBasicConstraints(const X509* cert) {
+	return((BASIC_CONSTRAINTS*)X509_get_ext_d2i(cert, NID_basic_constraints, NULL, NULL));
+}
+
+char* getCommonName(const X509* cert) {
 	/**
-	 * Check the given testDomain is covered by the certificate subject common
-	 * name.
+	 * Return the common name for a certificate. Null if none.
 	 */
 
 	int lastpos=-1;
@@ -87,26 +138,43 @@ int verifyCommonName(X509* cert, char* testDomain) {
 	/* If the certificate has no subject Common Name it's invalid */
 	X509_NAME* subject = X509_get_subject_name(cert);
 	if ((cnIndex = X509_NAME_get_index_by_NID(subject,NID_commonName,lastpos))<0){
-		return(CN_INVALID);
+		return(NULL);
 	}
 
 	/* Extract the subject common name */
-	X509_NAME_ENTRY* name=X509_NAME_get_entry(subject, cnIndex);
-	ASN1_STRING* cName = X509_NAME_ENTRY_get_data(name);
+	X509_NAME_ENTRY* name=X509_NAME_get_entry(subject, cnIndex); // No need to free
+	ASN1_STRING* cName = X509_NAME_ENTRY_get_data(name);		 //
 	char* commonName = getASNString(cName);
 
-	/* Check the common name is valid. Convert common name to regex that shall
-	 * match any domain name which it covers */
-	char* commonNameRegex=convertWildcardExpressionToRegex(commonName);
-	free(commonName);
-
-	/* Check if certificate domain regex matches the domain */
-	if(isMatch(commonNameRegex,testDomain)){
-		return(CN_VALID);
-	}
-	return(CN_INVALID);
+	return(commonName);
 }
 
+int verifyDomainName(dsa_t* a, char* domain){
+	/**
+	 * Given a list of domain names, check that the given domain matches any one of them.
+	 *
+	 * ARG:
+	 * 	<nameList> - List of names, may contain wildcards
+	 * 	<domain>   - domain to check names against for a match
+	 *
+	 * RETURN:
+	 * 	DN_MATCH - <domain> matches some name in <nameList>
+	 * 	DN_NOMATCH - <domain> does not match some name in <nameList>
+	 */
+	char* domainRegex=NULL;
+
+	/* Check if certificate domain names match <domain> */
+	for(int ix=0;ix<(a->length);ix++){
+		domainRegex=convertWildcardExpressionToRegex(a->array[ix]);
+		int matchStatus = isMatch(domainRegex,domain);
+		if(matchStatus==MATCH){
+			free(domainRegex);
+			return(DN_MATCH);
+		}
+		free(domainRegex);
+	}
+	return(DN_NOMATCH);
+}
 
 char* convertWildcardExpressionToRegex(char* wString){
 	/**
@@ -176,43 +244,40 @@ char* convertWildcardExpressionToRegex(char* wString){
 	return(convertedString);
 }
 
-
-char* getASNString(ASN1_STRING* s) {
+char* getASNString(const ASN1_STRING* s) {
 	/**
 	 * Return null terminated copy of asn1 string
 	 */
 	char* str;
 	int needNull=0;
-	int l = ASN1_STRING_length(s);
+	int length=ASN1_STRING_length(s);
 
 	/* String is empty*/
-	if (l==0){
+	if (length==0){
 		str=malloc(sizeof(char)*1);
 		str[0]='\0';
 
 	} else {
-		/* Note this data should not be freed as per man page */
+		/* Note get0_data result should not be freed as per man page */
 		const char* data=ASN1_STRING_get0_data(s);
 
 		/* Add a null byte if necessary */
-		if(data[l-1]!='\0'){
+		if(data[length-1]!='\0'){
 			needNull=1;
 		}
 
-		str=malloc(sizeof(char)*(l+needNull));
-		memcpy(str, data, l);
+		str=malloc(sizeof(char)*(length+needNull));
+		memcpy(str, data, length);
 
 		/* Terminate with a null byte */
 		if (needNull){
-			str[l]='\0';
+			str[length]='\0';
 		}
 	}
-
 	return(str);
 }
 
-
-int verifyValidity(X509* cert){
+int verifyTimeValidity(const X509* cert){
 	/**
 	 * Given a certificate, verify it's valid for the current time
 	 */
@@ -231,12 +296,11 @@ int verifyValidity(X509* cert){
 	return(CT_VALID);
 }
 
-
-int getPublicKeyLength(X509* cert){
+int getPublicKeyLength(const X509* cert){
 	return(RSA_bits(EVP_PKEY_get0_RSA(X509_get0_pubkey(cert))));
 }
 
-void programExit(char* m) {
-	printf(m);
+void programExit(char* m, int status) {
+	mylog(m);
+	exit(status);
 }
-
