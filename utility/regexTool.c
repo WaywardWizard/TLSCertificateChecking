@@ -12,9 +12,20 @@
 
 #include "regexTool.h"
 #include "logger.h"
+#include "dataStructure.h"
 
 #define true 1
 #define false 0
+
+dsa_t* extractAllMatch(char* regex, char* searchString){
+	dsa_t* array=create_dsa();
+	int ix=0;
+	char* buffer;
+	while( (searchString=extractMatch(regex, searchString, &buffer))!=NULL){
+		writeto_dsa(array, buffer, ix++);
+	}
+	return(array);
+}
 
 char*
 extractMatch(char* regex, char* searchString, char** destination) {
@@ -24,8 +35,8 @@ extractMatch(char* regex, char* searchString, char** destination) {
 	 * Terminates if an error occured
 	 *
 	 * ARGUMENT:
-	 * 	destination - this is an allocated pointer addres which will be
-	 * 	allocated, and then the match will be writted into the allocated memory.
+	 * 	destination - this is an allocated pointer address. *destination will be
+	 * 	allocated, and then the match will be written into the allocated memory.
 	 * 	The match will be terminated with a null byte.
 	 *
 	 * 	searchString - string to search
@@ -95,7 +106,7 @@ int isMatch(char* regex, char* searchString){
 
 	/* Return indicating if a match was found */
 	if(error!=REG_NOMATCH){
-		return true;
+		return MATCH;
 	}
-	return false;
+	return NOMATCH;
 }
