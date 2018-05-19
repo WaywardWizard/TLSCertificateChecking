@@ -2,7 +2,7 @@ CC			= gcc
 CFLAG		= -g -iquote $(UTILITY_PATH)
 CFLAGTRAIL  = -lssl -lcrypto -lm
 EXE			= certcheck
-LINK_OBJECT = certVerifier.o regexTool.o logger.o dataStructure.o
+LINK_OBJECT = certVerifier.o regexTool.o logger.o dataStructure.o csvTool.o
 UTILITY_PATH= utility/
 
 all: $(EXE)
