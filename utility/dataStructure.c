@@ -27,6 +27,11 @@ void append_dsa(dsa_t* dest, dsa_t* source) {
 		writeto_dsa(dest, source->array[ix],dest->length);
 	}
 }
+
+void appendto_dsa(dsa_t* array, char* word){
+	writeto_dsa(array, word, array->length);
+}
+
 void
 writeto_dsa(dsa_t *array, char* word, int ix){
     /* DESC: Writes a string to dynamic string array at a given index. If a
@@ -114,6 +119,14 @@ delete_dsa(dsa_t* array) {
     }
     free(array);
     array=NULL;
+}
+
+const char* getItem_dsa(dsa_t* array, int index) {
+	/**
+	 * Return a const char* to item at index. Null if index invalid or has nothing
+	 */
+	if(index>=array->size){return(NULL);}
+	return((const char*)(array->array[index]));
 }
 
 int
