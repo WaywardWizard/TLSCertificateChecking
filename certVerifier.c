@@ -8,6 +8,7 @@
 #include "certVerifier.h"
 #include "regexTool.h"
 #include "logger.h"
+#include "csvTool.h"
 #include "dataStructure.h" // Provides dsa_t - "dynamic string array".
 
 #include <openssl/x509.h>
@@ -29,17 +30,26 @@
 #include <regex.h>
 #include <time.h>
 
-#define WILDCARD '*'
+
+/* A wildcard is any contiguous sequence of WILDCARD not located after a literal '.'*/
+#define WILDCARD "*"
+#define WILDCARD_MATCHER "[^.]*[" WILDCARD "]+"
 #define WILDCARD_MATCHES "[A-Za-z0-9-]"
 #define ALLOWABLE_DOMAIN_CHAR "[A-Z*.a-z0-9-]+"
 
 #define DN_MATCH 10239
 #define DN_NOMATCH 2398
 
+#define OUTPUT_FILENAME "output.csv"
+#define MIN_ALLOWABLE_KEYLENGTH 2048
+
+/* Maximum Possible length of text usage identifiers - 1 */
+#define CERT_USAGE_BUFFER_LEN 512
+
 
 X509* loadCertificate(char* path);
-int verifyDomainName(dsa_t* a, char* domain);
-char* convertWildcardExpressionToRegex(char* wString);
+int verifyDomainName(dsa_t* a, const char* domain);
+char* convertWildcardExpressionToRegex(const char* wString);
 char* getASNString(const ASN1_STRING* s);
 int verifyTimeValidity(const X509* cert);
 void programExit(char* m, int status);
@@ -48,6 +58,8 @@ char* getCommonName(const X509* cert);
 dsa_t* getSubjectAlternativeName(const X509* cert);
 BASIC_CONSTRAINTS* getBasicConstraints(const X509* cert);
 EXTENDED_KEY_USAGE* getExtendedKeyUsage(const X509* cert);
+int validateCertificate(const char* cPath, const char* domain, dsa_t* requiredKeyUsage);
+int verifyExtendedKeyUsage(const X509* cert, dsa_t* requiredKeyUsage);
 
 int main(int argc, char** argv) {
 
@@ -55,31 +67,90 @@ int main(int argc, char** argv) {
 	ERR_load_BIO_strings();
 	ERR_load_crypto_strings();
 
-	char* cPath="test/certificates/testnine.crt";
+	/* String boolean value representation, 0|1*/
+	char* certificateValidString=malloc(sizeof(char)*2); // null and 1|0 char
+	int certificateValid;
+	dsa_t* row;
+
+	FILE* csv = fopen(argv[1],"r");
+	FILE* outputCsv = fopen(OUTPUT_FILENAME, "w");
+
+	/* Define usage requirements of certificates being validated. */
+	dsa_t* usageRequirement = create_dsa();
+	appendto_dsa(usageRequirement, "TLS Web Server Authentication");
+
+	/* Iterate over certificates of CSV file */
+	while((row=readRow(csv))!=NULL) {
+
+		/*Extract certificate validation parameters */
+		const char* certificatePath=getItem_dsa(row,0);
+		const char* domain=getItem_dsa(row,1);
+
+		/*Validate*/
+		certificateValid=validateCertificate(certificatePath, domain, usageRequirement);
+		snprintf(certificateValidString, ((size_t)2), "%d", certificateValid);
+
+		/*Mutate input row to output row form and write out */
+		appendto_dsa(row, certificateValidString);
+		writeRow(outputCsv, row);
+	}
+	fclose(csv);
+	fclose(outputCsv);
+}
+
+int validateCertificate(const char* cPath, const char* domain, dsa_t* requiredKeyUsage) {
+	/**
+	 * Validate certificate at <cPath> for <domain>
+	 *
+	 * A certificate is valid if,
+	 * 		*) It is valid for current time.
+	 * 		*) PKey for certificale has length >=2048bit
+	 * 		*) Basic Constraints show CA:False
+	 * 		*) Extended usage shows TLS Web Server Authentication
+	 *
+	 * ARGS:
+	 * 		cPath - path to certificate to check
+	 * 		domain - domain name against which to check certificate
+	 *
+	 * RETN:
+	 * 		1 - Certificate valid for <domain>
+	 * 		0 - Certificate invalid
+	 *
+	 * ASSN:
+	 * 		All certificates have subject RSA keys
+	 */
+
 	const X509* cert = loadCertificate(cPath);
-	int dateValid=(verifyTimeValidity(cert)==CT_VALID);
-	int keyLength=getPublicKeyLength(cert);
 
 	/* Extract domain names */
 	dsa_t* altName = getSubjectAlternativeName(cert);
 	char* dName = getCommonName(cert);
-	writeto_dsa(altName, dName, altName->length);
+	appendto_dsa(altName, dName);
 	free(dName);
-	BASIC_CONSTRAINTS* bc = getBasicConstraints(cert);
-	EXTENDED_KEY_USAGE* ku = getExtendedKeyUsage(cert);
-	int n = sk_ASN1_OBJECT_num(ku);
-	char* dataValue=malloc(sizeof(char)*1024);
-	dataValue=(char*)realloc(dataValue, OBJ_obj2txt(dataValue, 1024, sk_ASN1_OBJECT_pop(ku), 0));
 
-	verifyDomainName(altName, "derp.com");
+	/* Inspect certificate */
+	int dateValid=(verifyTimeValidity(cert)==CT_VALID);
+	int keyLength=getPublicKeyLength(cert);
+	int keyLengthValid=(keyLength>=MIN_ALLOWABLE_KEYLENGTH);
+	int domainValid = verifyDomainName(altName, domain);
+	BASIC_CONSTRAINTS* certificateBasicConstraints = getBasicConstraints(cert);
+	int basicConstraintCA = certificateBasicConstraints->ca;
+	int usageValid = verifyExtendedKeyUsage(cert, requiredKeyUsage);
+
+	/* Check validity */
+	int certValid = dateValid \
+			&& keyLengthValid
+			&& (domainValid==DN_MATCH)
+			&& !basicConstraintCA
+			&& usageValid;
+
+	return(certValid);
 }
 
-
-/**
- * Given a path to a certificate, load it into an X509 structure
- * and return it.
- */
 X509* loadCertificate(char* path){
+	/**
+	 * load certificate at <path>
+	 */
 
 	X509* cert = NULL;
 	BIO* cBio = BIO_new(BIO_s_file());
@@ -123,6 +194,51 @@ EXTENDED_KEY_USAGE* getExtendedKeyUsage(const X509* cert) {
 	return((EXTENDED_KEY_USAGE*)X509_get_ext_d2i(cert, NID_ext_key_usage, NULL, NULL));
 }
 
+int verifyExtendedKeyUsage(const X509* cert, dsa_t* usageRequired){
+	/**
+	 * Check <cert> is valid for <usageRequired>
+	 *
+	 * ARGS:
+	 * 	cert - Certificate to check
+	 * 	usageRequired - List of text usage identifiers to check
+	 *
+	 * RETN:
+	 * 	1 - indicate cert is valid for all given usages. Otherwise 0
+	 */
+
+	EXTENDED_KEY_USAGE* certUsages = getExtendedKeyUsage(cert);
+	const char* requiredUsageIdentifier;
+	char certUsageIdBuffer[CERT_USAGE_BUFFER_LEN];
+	int nCertUsage = sk_ASN1_OBJECT_num(certUsages);
+
+	int hasCurrentRequiredUsage=0;
+
+	/* Check each required usage is covered by the certificate */
+	for(int ix=0;ix<(usageRequired->length);ix++){
+
+		requiredUsageIdentifier=getItem_dsa(usageRequired, ix);
+
+		/* Search for required usage in certificate usages */
+		for(int ux=0;ux<nCertUsage;ux++){
+
+			/* Extract certificate usage */
+			const ASN1_OBJECT* certUsageItem = sk_ASN1_OBJECT_value(certUsages, ux);
+			i2t_ASN1_OBJECT(certUsageIdBuffer, CERT_USAGE_BUFFER_LEN, certUsageItem);
+
+			/* Check against usage needed */
+			if (strcasecmp(certUsageIdBuffer, requiredUsageIdentifier)==0) {
+				hasCurrentRequiredUsage=1;
+				break;
+			}
+		}
+		/* Search failed */
+		if(!hasCurrentRequiredUsage){
+			return(0);
+		}
+	}
+	return(1);
+}
+
 BASIC_CONSTRAINTS* getBasicConstraints(const X509* cert) {
 	return((BASIC_CONSTRAINTS*)X509_get_ext_d2i(cert, NID_basic_constraints, NULL, NULL));
 }
@@ -149,7 +265,7 @@ char* getCommonName(const X509* cert) {
 	return(commonName);
 }
 
-int verifyDomainName(dsa_t* a, char* domain){
+int verifyDomainName(dsa_t* altNames, const char* domain){
 	/**
 	 * Given a list of domain names, check that the given domain matches any one of them.
 	 *
@@ -164,84 +280,40 @@ int verifyDomainName(dsa_t* a, char* domain){
 	char* domainRegex=NULL;
 
 	/* Check if certificate domain names match <domain> */
-	for(int ix=0;ix<(a->length);ix++){
-		domainRegex=convertWildcardExpressionToRegex(a->array[ix]);
+	for(int ix=0;ix<(altNames->length);ix++){
+		domainRegex=convertWildcardExpressionToRegex(getItem_dsa(altNames, ix));
 		int matchStatus = isMatch(domainRegex,domain);
+		free(domainRegex);
 		if(matchStatus==MATCH){
-			free(domainRegex);
 			return(DN_MATCH);
 		}
-		free(domainRegex);
 	}
 	return(DN_NOMATCH);
 }
 
-char* convertWildcardExpressionToRegex(char* wString){
+char* convertWildcardExpressionToRegex(const char* wString){
 	/**
-	 * Replace any wildcards found in wString with an equivalent ERE.
+	 * Replace any wildcards found in <wString> with an equivalent ERE.
 	 *
-	 * wString must be null terminated.
+	 * wString must be null terminated. Wildcards are standins for any number
+	 * of chars in WILDCARD_MATCHES (valid domain name chars)
 	 *
-	 * Wildcards are standins for any number of chars in WILDCARD_MATCHES
+	 * Wildcards can only occur in the leftmost portion of <wString>, where a
+	 * portion is delineated with a '.' (as per WILDCARD_MATCHER)
 	 *
-	 * Return converted expression. Must be free'd
+	 * RETN:
+	 *	 Return converted expression. Must be free'd
 	 */
+	char* buffer;
+	char* result=strdup(wString);
 
-	/* Return the string it'self if it contains no wildcards*/
-	if (strchr(wString,WILDCARD)==NULL){
-		return(strdup(wString));
+	while((buffer=replaceMatch(WILDCARD_MATCHER, result, WILDCARD_MATCHES))!=NULL){
+		free(result);
+		result=buffer;
 	}
 
-	/* Replace wildcard with it's equivalent regex */
-
-	/* Count wildcards in string */
-	int lastCharMatched=0;
-	int nWildCard=0;
-	for (char* scanner=wString;
-			strchr(scanner, WILDCARD)!=NULL;
-			scanner=(strchr(scanner,WILDCARD))+1){
-
-		if (*scanner == WILDCARD){
-			if(!lastCharMatched){nWildCard++;}
-			lastCharMatched=1;
-		} else {
-			lastCharMatched=0;
-		}
-	}
-
-	/* Calculate string length of regex to be returned */
-	int regexLength=strlen(wString)\
-						+ ((strlen(WILDCARD_MATCHES)-1)*nWildCard) + 1;
-
-	char* convertedString=malloc(sizeof(char)*regexLength);
-	char* cScanner=convertedString;
-	char* wildcardReplacement=WILDCARD_MATCHES;
-	int   wildcardReplacementLength=strlen(wildcardReplacement);
-
-	/* Assemble regex from source string*/
-	char* lastMatch=wString;
-	char* scanner=wString;
-	for (;strchr(scanner, WILDCARD)!=NULL; scanner=(strchr(scanner,WILDCARD)+1)) {
-
-		int delta = scanner-lastMatch-(lastMatch!=wString);
-
-		/* Ignoring the wildcard, copy everything from the last wildcard to current wc.*/
-		memcpy(cScanner,scanner, delta);
-		cScanner+=delta;
-
-		/* Replace wildcard with equivalent regex */
-		memcpy(cScanner,wildcardReplacement, wildcardReplacementLength);
-		cScanner+=wildcardReplacementLength;
-
-		lastMatch=scanner;
-	}
-
-	/* Write remainder of source string and terminate with a null byte */
-	memcpy(cScanner,scanner,strlen(scanner));
-	cScanner+=strlen(scanner);
-	cScanner[0]='\0';
-
-	return(convertedString);
+	/* Return a copy of wString if it contains no wildcards. */
+	return(result);
 }
 
 char* getASNString(const ASN1_STRING* s) {
@@ -281,17 +353,16 @@ int verifyTimeValidity(const X509* cert){
 	/**
 	 * Given a certificate, verify it's valid for the current time
 	 */
-	int now = time(NULL);
 
-	/* Time should be earlier than or equal to current time */
-	if(X509_cmp_current_time(X509_get0_notBefore(cert))>0){
+	int nDayBefore, nSecBefore, nDayAfter, nSecAfter;
+	ASN1_TIME_diff(&nDayBefore, &nSecBefore, X509_get0_notBefore(cert), NULL);
+	ASN1_TIME_diff(&nDayAfter, &nSecAfter, NULL, X509_get0_notAfter(cert));
+
+	/* Time should be within not before and not after */
+	if(nDayBefore<0 || nSecBefore<0 || nDayAfter<0 || nSecAfter<0){
 		return(CT_INVALID);
 	}
 
-	/* Time should be later than or equal to current time */
-	if(X509_cmp_current_time(X509_get0_notAfter(cert))<0){
-		return(CT_INVALID);
-	}
 	/* Current time is within the certificate validity period.*/
 	return(CT_VALID);
 }
