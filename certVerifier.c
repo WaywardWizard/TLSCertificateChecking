@@ -357,8 +357,8 @@ int verifyTimeValidity(const X509* cert){
 	 */
 
 	int nDayBefore, nSecBefore, nDayAfter, nSecAfter;
-	ASN1_TIME_diff(&nDayBefore, &nSecBefore, X509_get0_notBefore(cert), NULL);
-	ASN1_TIME_diff(&nDayAfter, &nSecAfter, NULL, X509_get0_notAfter(cert));
+	ASN1_TIME_diff(&nDayBefore, &nSecBefore, X509_get_notBefore(cert), NULL);
+	ASN1_TIME_diff(&nDayAfter, &nSecAfter, NULL, X509_get_notAfter(cert));
 
 	/* Time should be within not before and not after */
 	if(nDayBefore<0 || nSecBefore<0 || nDayAfter<0 || nSecAfter<0){
@@ -370,7 +370,7 @@ int verifyTimeValidity(const X509* cert){
 }
 
 int getPublicKeyLength(const X509* cert){
-	return(RSA_bits(EVP_PKEY_get0_RSA(X509_get0_pubkey(cert))));
+	return(RSA_bits(EVP_PKEY_get0_RSA(X509_get_pubkey(cert))));
 }
 
 void programExit(char* m, int status) {
