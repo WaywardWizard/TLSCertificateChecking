@@ -42,6 +42,7 @@
 #define DN_MATCH 10239
 #define DN_NOMATCH 2398
 
+#define BITS_PER_BYTE 8
 #define OUTPUT_FILENAME "output.csv"
 #define MIN_ALLOWABLE_KEYLENGTH 2048
 
@@ -378,7 +379,13 @@ int verifyTimeValidity(const X509* cert){
 }
 
 int getPublicKeyLength(const X509* cert){
-	return(RSA_bits(EVP_PKEY_get0_RSA(X509_get_pubkey(cert))));
+	EVP_PKEY evpKey = X509_get_pubkey(cert);
+	RSA* rsaKey = EVP_PKEY_get1_RSA(evpKey);
+	EVP_PKEY_free(evpKey);
+	RSA_free(rsaKey);
+	int size = RSA_size(rsaKey)*BITS_PER_BYTE;
+	/* 1.1 version: return(RSA_bits(EVP_PKEY_get1_RSA(X509_get_pubkey(cert))));*/
+	return(size);
 }
 
 void programExit(char* m, int status) {
