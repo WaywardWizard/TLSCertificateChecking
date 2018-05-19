@@ -9,13 +9,17 @@
 #define UTILITY_REGEXTOOL_H_
 
 #include "dataStructure.h"
+#include <regex.h>
 
 #define EREGCOMP 889
 #define MATCH 1
 #define NOMATCH 0
 
-char* extractMatch(char* regex, char* searchString, char** destination);
-dsa_t* extractAllMatch(char* regex, char* searchString);
-int isMatch(char* regex, char* searchString);
+const char* extractMatch(const char* regex, const char* searchString, char** destination);
+dsa_t* extractAllMatch(const char* regex, const char* searchString);
+int isMatch(const char* regex, const char* searchString);
+regmatch_t* findMatch(const char* regex, const char* searchString);
+char* jumpMatch(const char* regex, const char* searchString);
+char* replaceMatch(const char* regex, const char* source, char* replacement);
 
 #endif /* UTILITY_REGEXTOOL_H_ */
