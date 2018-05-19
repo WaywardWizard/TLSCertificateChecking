@@ -379,7 +379,7 @@ int verifyTimeValidity(const X509* cert){
 }
 
 int getPublicKeyLength(const X509* cert){
-	EVP_PKEY evpKey = X509_get_pubkey(cert);
+	EVP_PKEY* evpKey = X509_get_pubkey(cert);
 	RSA* rsaKey = EVP_PKEY_get1_RSA(evpKey);
 	EVP_PKEY_free(evpKey);
 	RSA_free(rsaKey);
