@@ -132,11 +132,13 @@ char* jumpMatch(const char* regex, const char* searchString) {
 int isMatch(const char* regex, const char* searchString){
 	/**
 	 * Return true/false indicating wether <regex> matches <searchString>
+	 *
+	 * Matching is case insensitive
 	 */
 	regex_t rx;
 	regmatch_t match;
 	int errSize=100; // Default error message size
-	int error = regcomp(&rx, regex, REG_EXTENDED);
+	int error = regcomp(&rx, regex, REG_EXTENDED|REG_ICASE);
 	int matchSize;
 
 	/* Check compilation sucessful */
