@@ -16,9 +16,9 @@
 #include <openssl/bio.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
 
 /*
-#include <openssl/evp.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/bn.h>
 #include <openssl/asn1.h>
@@ -65,9 +65,11 @@ int verifyExtendedKeyUsage(const X509* cert, dsa_t* requiredKeyUsage);
 
 int main(int argc, char** argv) {
 
+	/* Initialize*/
 	OpenSSL_add_all_algorithms();
 	ERR_load_BIO_strings();
 	ERR_load_crypto_strings();
+	OPENSSL_config(NULL);
 
 	/* String boolean value representation, 0|1*/
 	char* certificateValidString=malloc(sizeof(char)*2); // null and 1|0 char
@@ -96,8 +98,14 @@ int main(int argc, char** argv) {
 		appendto_dsa(row, certificateValidString);
 		writeRow(outputCsv, row);
 	}
+
+	/* Cleanup */
 	fclose(csv);
 	fclose(outputCsv);
+	EVP_cleanup();
+	CRYPTO_cleanup_all_ex_data();
+	ERR_free_strings();
+	return(0);
 }
 
 int validateCertificate(const char* cPath, const char* domain, dsa_t* requiredKeyUsage) {
@@ -333,7 +341,7 @@ char* getASNString(const ASN1_STRING* s) {
 
 	} else {
 		/* Note get0_data result should not be freed as per man page */
-		const char* data=ASN1_STRING_get0_data(s);
+		const char* data=ASN1_STRING_data(s);
 
 		/* Add a null byte if necessary */
 		if(data[length-1]!='\0'){
