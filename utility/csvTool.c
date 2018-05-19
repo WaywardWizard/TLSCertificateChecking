@@ -14,12 +14,6 @@
 #define CSV_BUFFER_SIZE 1024
 #define CSV_DEFAULT_FS ','
 
-/*
- * 1) Load csv file
- * 2) Read line, return a char**
- * 3) Write line, given a char**
- */
-
 dsa_t* readRow(FILE* csv) {
 	/**
 	 * Read a row of <csv> and return its cells as an array.

@@ -1,5 +1,5 @@
 /*
- * certVericator.c
+ * certVerifier.c
  *
  *  Created on: 13 May 2018
  *      Author: Ben Tomlin

@@ -1,3 +1,6 @@
+# Author: Ben Tomlin
+# 	  SN: 834198
+#   Date: 19thMay2018
 CC			= gcc
 CFLAG		= -g -iquote $(UTILITY_PATH)
 CFLAGTRAIL  = -lssl -lcrypto -lm
