@@ -18,14 +18,6 @@
 #include <openssl/err.h>
 #include <openssl/evp.h>
 
-/*
-#include <openssl/x509_vfy.h>
-#include <openssl/bn.h>
-#include <openssl/asn1.h>
-#include <openssl/objects.h>
-*/
-
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,8 +28,7 @@
 /* A wildcard is any contiguous sequence of WILDCARD not located after a literal '.'*/
 #define WILDCARD "*"
 #define WILDCARD_MATCHER "[^.]*[" WILDCARD "]+"
-#define WILDCARD_MATCHES "[A-Za-z0-9-]"
-#define ALLOWABLE_DOMAIN_CHAR "[A-Z*.a-z0-9-]+"
+#define WILDCARD_MATCHES "[A-Za-z0-9-]+"
 
 #define DN_MATCH 10239
 #define DN_NOMATCH 2398
@@ -70,10 +61,8 @@ int main(int argc, char** argv) {
 	OpenSSL_add_all_algorithms();
 	ERR_load_BIO_strings();
 	ERR_load_crypto_strings();
-	OPENSSL_config(NULL);
+	OPENSSL_config(NULL); // Deprecated but in place for bcompat
 
-	/* String boolean value representation, 0|1*/
-	char* certificateValidString=malloc(sizeof(char)*2); // null and 1|0 char
 	int certificateValid;
 	dsa_t* row;
 
@@ -87,6 +76,8 @@ int main(int argc, char** argv) {
 	/* Iterate over certificates of CSV file */
 	while((row=readRow(csv))!=NULL) {
 
+		char* certificateValidString=malloc(sizeof(char)*2); // null and 1|0 char
+
 		/*Extract certificate validation parameters */
 		const char* certificatePath=getItem_dsa(row,0);
 		const char* domain=getItem_dsa(row,1);
@@ -98,11 +89,13 @@ int main(int argc, char** argv) {
 		/*Mutate input row to output row form and write out */
 		appendto_dsa(row, certificateValidString);
 		writeRow(outputCsv, row);
+		delete_dsa(row); /* Frees all allocated strings also */
 	}
 
 	/* Cleanup */
 	fclose(csv);
 	fclose(outputCsv);
+	delete_dsa(usageRequirement);
 	EVP_cleanup();
 	CRYPTO_cleanup_all_ex_data();
 	ERR_free_strings();
